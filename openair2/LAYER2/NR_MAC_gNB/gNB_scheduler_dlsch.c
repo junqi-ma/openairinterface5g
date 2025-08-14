@@ -51,6 +51,13 @@
 #define WORD 32
 //#define SIZE_OF_POINTER sizeof (void *)
 
+// Maximum number of PDSCH PDUs that can be scheduled in one slot
+// This value is set considering:
+// 1. Maximum number of DCIs per CORESET (typically 16)
+// 2. Hardware processing capability
+// 3. Need to reserve PDUs for control information
+#define MAX_NUM_PDSCH_PDU_PER_SLOT 16
+
 int get_dl_tda(const gNB_MAC_INST *nrmac, int slot)
 {
   /* we assume that this function is mutex-protected from outside */
@@ -895,6 +902,9 @@ static void nr_dlsch_preprocessor(module_id_t module_id, frame_t frame, slot_t s
   pf_dl(module_id, frame, slot, UE_info->connected_ue_list, max_sched_ues, num_beams, n_rb_sched);
 }
 
+// Maximum number of dummy PDSCH PDUs that can be scheduled in one slot
+static int max_dummy_pdsch_pdu = 4; // Can be adjusted based on system capability
+
 nr_pp_impl_dl nr_init_dlsch_preprocessor(int CC_id) {
   /* during initialization: no mutex needed */
   /* in the PF algorithm, we have to use the TBsize to compute the coefficient.
@@ -999,6 +1009,80 @@ nfapi_nr_dl_tti_pdsch_pdu_rel15_t *prepare_pdsch_pdu(nfapi_nr_dl_tti_request_pdu
   pdsch_pdu->precodingAndBeamforming.prgs_list[0].pm_idx = sched_pdsch->pm_index;
   pdsch_pdu->precodingAndBeamforming.prgs_list[0].dig_bf_interface_list[0].beam_idx = beam_index;
   return pdsch_pdu;
+}
+
+static void schedule_dummy_pdsch(module_id_t module_id,
+                            frame_t frame,
+                            slot_t slot,
+                            nfapi_nr_dl_tti_request_t *DL_req,
+                            nfapi_nr_tx_data_request_t *TX_req,
+                            uint16_t *rballoc_mask,
+                            int num_beams) {
+  gNB_MAC_INST *gNB_mac = RC.nrmac[module_id];
+  const int CC_id = 0;
+  NR_ServingCellConfigCommon_t *scc = gNB_mac->common_channels[CC_id].ServingCellConfigCommon;
+  nfapi_nr_dl_tti_request_body_t *dl_req = &DL_req->dl_tti_request_body;
+
+  // Default configuration for dummy PDSCH
+  const uint8_t dummy_mcs = 9; // Use a moderate MCS
+  const uint8_t nrOfLayers = 1;
+  const uint32_t dummy_scrambling_id = 500; // Use different scrambling ID than real data
+
+  for (int beam_idx = 0; beam_idx < num_beams; beam_idx++) {
+    int rbStart = 0;
+    const uint16_t bwpSize = NRRIV2BW(scc->downlinkConfigCommon->initialDownlinkBWP->genericParameters.locationAndBandwidth, MAX_BWP_SIZE);
+    
+    while (rbStart < bwpSize) {
+      // Find continuous unused RBs
+      int rbLen = 0;
+      while ((rbStart + rbLen) < bwpSize && !(rballoc_mask[beam_idx * bwpSize + rbStart + rbLen])) {
+        rbLen++;
+      }
+
+      if (rbLen >= 4) { // Schedule dummy PDSCH only if we have at least 4 continuous RBs
+        const int pduindex = gNB_mac->pdu_index[CC_id]++;
+        nfapi_nr_dl_tti_request_pdu_t *dl_tti_pdsch_pdu = &dl_req->dl_tti_pdus[dl_req->nPDUs++];
+        memset(dl_tti_pdsch_pdu, 0, sizeof(nfapi_nr_dl_tti_request_pdu_t));
+        dl_tti_pdsch_pdu->PDUType = NFAPI_NR_DL_TTI_PDSCH_PDU_TYPE;
+        dl_tti_pdsch_pdu->PDUSize = (uint8_t)(2 + sizeof(nfapi_nr_dl_tti_pdsch_pdu));
+
+        nfapi_nr_dl_tti_pdsch_pdu_rel15_t *pdsch_pdu = &dl_tti_pdsch_pdu->pdsch_pdu.pdsch_pdu_rel15;
+        
+        // Configure basic PDSCH parameters for dummy transmission
+        pdsch_pdu->pduBitmap = 0;
+        pdsch_pdu->rnti = 0xFFFF; // Use reserved RNTI for dummy PDSCH
+        pdsch_pdu->pdu_index = pduindex;
+        pdsch_pdu->BWPSize = bwpSize;
+        pdsch_pdu->BWPStart = 0;
+        pdsch_pdu->SubcarrierSpacing = scc->downlinkConfigCommon->initialDownlinkBWP->genericParameters.subcarrierSpacing;
+        pdsch_pdu->CyclicPrefix = 0;
+        
+        // Resource allocation
+        pdsch_pdu->rbStart = rbStart;
+        pdsch_pdu->rbSize = rbLen;
+        pdsch_pdu->VRBtoPRBMapping = 0; // non-interleaved
+        
+        // Basic parameters
+        pdsch_pdu->NrOfCodewords = 1;
+        pdsch_pdu->targetCodeRate[0] = nr_get_code_rate_dl(dummy_mcs, 0);
+        pdsch_pdu->qamModOrder[0] = nr_get_Qm_dl(dummy_mcs, 0);
+        pdsch_pdu->mcsIndex[0] = dummy_mcs;
+        pdsch_pdu->mcsTable[0] = 0;
+        pdsch_pdu->rvIndex[0] = 0;
+        
+        // Set DMRS and other parameters
+        pdsch_pdu->dmrsConfigType = 0;
+        pdsch_pdu->dlDmrsScramblingId = dummy_scrambling_id;
+        pdsch_pdu->dmrsPorts = (1 << nrOfLayers) - 1;
+        
+        // Mark RBs as used
+        for(int rb = rbStart; rb < rbStart + rbLen; rb++) {
+          rballoc_mask[beam_idx * bwpSize + rb] = 0x3FF; // Mark all symbols
+        }
+      }
+      rbStart += rbLen + 1;
+    }
+  }
 }
 
 void nr_schedule_ue_spec(module_id_t module_id,
@@ -1392,5 +1476,15 @@ void nr_schedule_ue_spec(module_id_t module_id,
     TX_req->Slot = slot;
     /* mark UE as scheduled */
     sched_pdsch->rbSize = 0;
+  }
+
+  // Schedule dummy PDSCH for unused PRBs after all UE scheduling is done
+  // int remaining_pdus = MAX_NUM_PDSCH_PDU_PER_SLOT - dl_req->nPDUs;
+  int remaining_pdus = MAX_NUM_PDSCH_PDU_PER_SLOT - dl_req->nPDUs;
+  if (remaining_pdus > 1) { // Keep at least 1 PDU for control
+    int max_dummy = min(remaining_pdus - 1, max_dummy_pdsch_pdu);
+    if (max_dummy > 0) {
+      schedule_dummy_pdsch(module_id, frame, slot, DL_req, TX_req, gNB_mac->common_channels[CC_id].vrb_map, gNB_mac->beam_info.num_beams);
+    }
   }
 }
