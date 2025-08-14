@@ -1507,13 +1507,13 @@ void nr_schedule_ue_spec(module_id_t module_id,
   // Schedule dummy PDSCH for unused PRBs after all UE scheduling is done
   // int remaining_pdus = MAX_NUM_PDSCH_PDU_PER_SLOT - dl_req->nPDUs;
   int remaining_pdus = MAX_NUM_PDSCH_PDU_PER_SLOT - dl_req->nPDUs;
-  if (remaining_pdus > 1) { // Keep at least 1 PDU for control
-    int max_dummy = min(remaining_pdus - 1, max_dummy_pdsch_pdu);
+  if (remaining_pdus > 2) { // Keep more PDUs for control and essential data
+    int max_dummy = min(remaining_pdus - 2, min(2, max_dummy_pdsch_pdu)); // Limit dummy PDUs to 2
     if (max_dummy > 0) {
       // Get number of active beams from beam_info
       int active_beams = 1; // Default to 1 if no beam info available
       if (gNB_mac->common_channels) {
-        active_beams = MAX_NUM_BEAMS; // Use maximum supported beams
+        active_beams = 1; // Limit to 1 beam for dummy transmission
       }
       schedule_dummy_pdsch(module_id, frame, slot, DL_req, TX_req, gNB_mac->common_channels[CC_id].vrb_map, active_beams);
     }
