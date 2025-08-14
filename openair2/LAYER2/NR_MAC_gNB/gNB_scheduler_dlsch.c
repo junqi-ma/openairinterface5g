@@ -1075,11 +1075,11 @@ static void schedule_dummy_pdsch(module_id_t module_id,
         pdsch_pdu->mcsTable[0] = 0;
         pdsch_pdu->rvIndex[0] = 0;
         pdsch_pdu->TBSize[0] = dummy_tb_size;
-        pdsch_pdu->newDataIndicator[0] = 1; // New data indicator
-        pdsch_pdu->dataScramblingId = (uint16_t)(*scc->physCellId);  // Dereference and cast to uint16_t
+        // 对于dummy传输，我们不设置NDI，因为这是用于填充的传输，不参与实际的HARQ过程
+        pdsch_pdu->dataScramblingId = scc->physCellId ? (uint16_t)(*scc->physCellId) : 0;
         pdsch_pdu->numDmrsCdmGrpsNoData = 1;
         pdsch_pdu->dmrsConfigType = 0; // Type 1
-        pdsch_pdu->dlDmrsScramblingId = (uint16_t)(*scc->physCellId);  // Dereference and cast to uint16_t
+        pdsch_pdu->dlDmrsScramblingId = scc->physCellId ? (uint16_t)(*scc->physCellId) : 0;
         
         // Set DMRS and other parameters
         pdsch_pdu->dmrsConfigType = 0;
