@@ -1019,6 +1019,10 @@ static void schedule_dummy_pdsch(module_id_t module_id,
                             nfapi_nr_tx_data_request_t *TX_req,
                             uint16_t (*rballoc_mask)[275],
                             int max_beams) {
+  /* Generate dummy data for transport block */
+  const int dummy_tb_size = 8; // Minimum size transport block
+  uint8_t *dummy_data = malloc(dummy_tb_size);
+  memset(dummy_data, 0xFF, dummy_tb_size); // Fill with dummy pattern
   gNB_MAC_INST *gNB_mac = RC.nrmac[module_id];
   const int CC_id = 0;
   NR_ServingCellConfigCommon_t *scc = gNB_mac->common_channels[CC_id].ServingCellConfigCommon;
@@ -1070,6 +1074,12 @@ static void schedule_dummy_pdsch(module_id_t module_id,
         pdsch_pdu->mcsIndex[0] = dummy_mcs;
         pdsch_pdu->mcsTable[0] = 0;
         pdsch_pdu->rvIndex[0] = 0;
+        pdsch_pdu->TBSize[0] = dummy_tb_size;
+        pdsch_pdu->ndi[0] = 1; // New data indicator
+        pdsch_pdu->dataScramblingId = gNB_mac->physCellId;
+        pdsch_pdu->numDmrsCdmGrpsNoData = 1;
+        pdsch_pdu->dmrsConfigType = 0; // Type 1
+        pdsch_pdu->dlDmrsScramblingId = gNB_mac->physCellId;
         
         // Set DMRS and other parameters
         pdsch_pdu->dmrsConfigType = 0;
@@ -1080,10 +1090,25 @@ static void schedule_dummy_pdsch(module_id_t module_id,
         for(int rb = rbStart; rb < rbStart + rbLen; rb++) {
           rballoc_mask[beam_idx][rb] = 0x3FF; // Mark all symbols
         }
+
+        // Add transport block to TX request
+        const int ntx_req = TX_req->Number_of_PDUs;
+        nfapi_nr_pdu_t *tx_req = &TX_req->pdu_list[ntx_req];
+        tx_req->PDU_index = pduindex;
+        tx_req->PDU_length = dummy_tb_size;
+        tx_req->num_TLV = 1;
+        tx_req->TLVs[0].length = dummy_tb_size;
+        memcpy(tx_req->TLVs[0].value.direct, dummy_data, dummy_tb_size);
+        TX_req->Number_of_PDUs++;
+        TX_req->SFN = frame;
+        TX_req->Slot = slot;
       }
       rbStart += rbLen + 1;
     }
   }
+  
+  // Free dummy data
+  free(dummy_data);
 }
 
 void nr_schedule_ue_spec(module_id_t module_id,
