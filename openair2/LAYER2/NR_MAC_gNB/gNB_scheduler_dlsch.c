@@ -1075,11 +1075,11 @@ static void schedule_dummy_pdsch(module_id_t module_id,
         pdsch_pdu->mcsTable[0] = 0;
         pdsch_pdu->rvIndex[0] = 0;
         pdsch_pdu->TBSize[0] = dummy_tb_size;
-        pdsch_pdu->ndi[0] = 1; // New data indicator
-        pdsch_pdu->dataScramblingId = (uint16_t)scc->physCellId;  // Cast to uint16_t
+        pdsch_pdu->newDataIndicator[0] = 1; // New data indicator
+        pdsch_pdu->dataScramblingId = (uint16_t)(*scc->physCellId);  // Dereference and cast to uint16_t
         pdsch_pdu->numDmrsCdmGrpsNoData = 1;
         pdsch_pdu->dmrsConfigType = 0; // Type 1
-        pdsch_pdu->dlDmrsScramblingId = (uint16_t)scc->physCellId;  // Cast to uint16_t
+        pdsch_pdu->dlDmrsScramblingId = (uint16_t)(*scc->physCellId);  // Dereference and cast to uint16_t
         
         // Set DMRS and other parameters
         pdsch_pdu->dmrsConfigType = 0;
